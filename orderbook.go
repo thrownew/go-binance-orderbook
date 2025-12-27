@@ -38,6 +38,8 @@ const (
 
 var (
 	ErrSymbolNotFound = errors.New("symbol not found")
+
+	errEmptyBook = errors.New("empty book")
 )
 
 type (
@@ -66,6 +68,7 @@ type (
 	}
 
 	Logger interface {
+		Debugf(format string, args ...any)
 		Infof(format string, args ...any)
 		Warnf(format string, args ...any)
 		Errorf(format string, args ...any)
@@ -116,6 +119,83 @@ type (
 		Asks         [][2]string `json:"asks"`
 	}
 )
+
+// WithSymbols sets the list of trading symbols to track
+func WithSymbols(symbols ...string) Option {
+	return func(o *options) {
+		o.symbols = symbols
+	}
+}
+
+// WithLogger sets a custom logger implementation
+func WithLogger(logger Logger) Option {
+	return func(o *options) {
+		o.logger = logger
+	}
+}
+
+// WithHandler sets a callback function that will be called when orderbook updates
+func WithHandler(handler HandlerFunc) Option {
+	return func(o *options) {
+		o.handler = handler
+	}
+}
+
+// WithEventChanSize sets the size of the event channel buffer
+func WithEventChanSize(size int) Option {
+	return func(o *options) {
+		o.eventChanSize = size
+	}
+}
+
+// WithStoreDepth sets the maximum number of depth levels to store in memory
+func WithStoreDepth(depth int) Option {
+	return func(o *options) {
+		o.storeDepth = depth
+	}
+}
+
+// WithStreamUpdateInterval sets the update interval for the stream (100ms, 250ms, 500ms)
+func WithStreamUpdateInterval(interval string) Option {
+	return func(o *options) {
+		o.streamUpdateInterval = interval
+	}
+}
+
+// WithSnapshotDepth sets the number of depth levels to fetch in snapshot
+func WithSnapshotDepth(depth int) Option {
+	return func(o *options) {
+		o.snapshotDepth = depth
+	}
+}
+
+// WithSnapshotLoadParallelLimit sets the limit for concurrent snapshot fetches
+func WithSnapshotLoadParallelLimit(limit int) Option {
+	return func(o *options) {
+		o.snapshotLoadParallelLimit = limit
+	}
+}
+
+// WithHandleDepth sets the number of depth levels to include in handler callbacks
+func WithHandleDepth(depth int) Option {
+	return func(o *options) {
+		o.handleDepth = depth
+	}
+}
+
+// WithWSDialer sets a custom websocket dialer factory function
+func WithWSDialer(dialer func() *websocket.Dialer) Option {
+	return func(o *options) {
+		o.wsDealer = dialer
+	}
+}
+
+// WithHTTPClient sets a custom HTTP client factory function
+func WithHTTPClient(client func() *http.Client) Option {
+	return func(o *options) {
+		o.httpClient = client
+	}
+}
 
 func NewBuilder(opts ...Option) *Builder {
 	o := options{
@@ -172,7 +252,7 @@ func (b *Builder) Run(ctx context.Context) error {
 				return
 			default:
 				if err := b.listenWS(ctx); err != nil {
-					b.opts.logger.Errorf("OrderBook: Listen ws error: %s", err.Error())
+					b.opts.logger.Errorf("Binance: OrderBook: Listen ws error: %s", err.Error())
 					time.Sleep(time.Second)
 				}
 			}
@@ -188,16 +268,18 @@ func (b *Builder) Run(ctx context.Context) error {
 				case ev := <-ch:
 					err := bk.applyEvent(ev, b.opts.logger)
 					if err != nil {
-						b.opts.logger.Warnf("OrderBook: Symbol `%s`: Apply event error: %s", bk.symbol, err)
+						if !errors.Is(err, errEmptyBook) {
+							b.opts.logger.Warnf("Binance: OrderBook: Symbol `%s`: Apply event error: %s", bk.symbol, err)
+						}
 						snap, sErr := b.fetchSnapshot(ctx, snapshotLimiter, bk.symbol, b.opts.snapshotDepth)
 						if sErr != nil {
-							b.opts.logger.Errorf("OrderBook: Symbol `%s`: Fetch snapshot error: %s", bk.symbol, sErr)
+							b.opts.logger.Errorf("Binance: OrderBook: Symbol `%s`: Fetch snapshot error: %s", bk.symbol, sErr)
 						} else {
 							bk.applySnapshot(snap)
-							b.opts.logger.Infof("OrderBook: Symbol `%s`: Snapshot applied (last update id: %d)", bk.symbol, snap.LastUpdateID)
+							b.opts.logger.Debugf("Binance: OrderBook: Symbol `%s`: Snapshot applied (last update id: %d)", bk.symbol, snap.LastUpdateID)
 							// reapply the event after snapshot again
 							if err = bk.applyEvent(ev, b.opts.logger); err != nil {
-								b.opts.logger.Errorf("OrderBook: Symbol `%s`: Reapply event error: %s", bk.symbol, err)
+								b.opts.logger.Errorf("Binance: OrderBook: Symbol `%s`: Reapply event error: %s", bk.symbol, err)
 								continue
 							}
 						}
@@ -308,7 +390,7 @@ func (b *Builder) fetchSnapshot(ctx context.Context, limiter chan struct{}, symb
 	if err = json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		return snap, err
 	}
-	b.opts.logger.Infof("Binance: OrderBook: Symbol `%s`: Fetching snapshot", symbol)
+	b.opts.logger.Debugf("Binance: OrderBook: Symbol `%s`: Fetching snapshot", symbol)
 	return snap, nil
 }
 
@@ -327,7 +409,7 @@ func (b *book) applyEvent(ev DepthEvent, logger Logger) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.lastUpdateID == 0 {
-		return fmt.Errorf("empty book")
+		return errEmptyBook
 	}
 	if ev.UFinal < b.lastUpdateID {
 		return nil // skip old events
@@ -336,7 +418,7 @@ func (b *book) applyEvent(ev DepthEvent, logger Logger) error {
 		return fmt.Errorf("prev final ID %d not equal last update ID %d", ev.PrevFinal, b.lastUpdateID) // chain outdate needs resync
 	}
 	if ev.U <= b.lastUpdateID && ev.UFinal >= b.lastUpdateID {
-		logger.Infof("Binance: OrderBook: Symbol: %s: Synchronized (U=%d UFinal=%d PrevFinal=%d)", b.symbol, ev.U, ev.UFinal, ev.PrevFinal)
+		logger.Debugf("Binance: OrderBook: Symbol: %s: Synchronized (U=%d UFinal=%d PrevFinal=%d)", b.symbol, ev.U, ev.UFinal, ev.PrevFinal)
 		b.synced = true
 	}
 	applyLevels(b.bids, ev.Bids, true, b.depth)

@@ -24,35 +24,34 @@ go get github.com/thrownew/go-binance-orderbook
 package main
 
 import (
-	"context"
-	"fmt"
-	"log/slog"
-	"time"
+   "context"
+   "fmt"
+   "time"
 
-	orderbook "github.com/thrownew/go-binance-orderbook"
+   orderbook "github.com/thrownew/go-binance-orderbook"
 )
 
 func main() {
-	b := orderbook.NewBuilder(
-		orderbook.WithSymbols("BTCUSDT", "ETHUSDT"),
-		orderbook.WithHandleDepth(3),
-		orderbook.WithHandler(func(ob orderbook.OrderBook) {
-			fmt.Printf("update: %+v\n", ob)
-		}),
-		orderbook.WithLogger(orderbook.NewSlogLogger(slog.With("component", "binance-orderbook"))),
-	)
+   b := orderbook.NewBuilder(
+      orderbook.WithSymbols("BTCUSDT", "ETHUSDT"),
+      orderbook.WithHandleDepth(3),
+      orderbook.WithHandler(func(ob orderbook.OrderBook) {
+         fmt.Printf("update: %+v\n", ob)
+      }),
+      orderbook.WithLogger(orderbook.NewLogLogger(nil)),
+   )
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		if err := b.Run(ctx); err != nil {
-			fmt.Println(fmt.Errorf("run error: %w", err))
-		}
-	}()
+   ctx, cancel := context.WithCancel(context.Background())
+   defer cancel()
+   go func() {
+      if err := b.Run(ctx); err != nil {
+         fmt.Println(fmt.Errorf("run error: %w", err))
+      }
+   }()
 
-	<-time.After(10 * time.Second)
+   <-time.After(10 * time.Second)
 
-	cancel()
+   cancel()
 }
 ```
 

@@ -1,9 +1,7 @@
 package binanceorderbook
 
 import (
-	"fmt"
-	"io"
-	"log/slog"
+	"log"
 )
 
 var _ Logger = NopLogger{}
@@ -15,29 +13,18 @@ func (NopLogger) Infof(string, ...any)  {}
 func (NopLogger) Warnf(string, ...any)  {}
 func (NopLogger) Errorf(string, ...any) {}
 
-type SlogLogger struct {
-	l *slog.Logger
+type LogLogger struct {
+	l *log.Logger
 }
 
-func NewSlogLogger(l *slog.Logger) SlogLogger {
+func NewLogLogger(l *log.Logger) LogLogger {
 	if l == nil {
-		l = slog.New(slog.NewTextHandler(io.Discard, nil))
+		l = log.Default()
 	}
-	return SlogLogger{l: l}
+	return LogLogger{l: l}
 }
 
-func (a SlogLogger) Debugf(format string, args ...any) {
-	a.l.Debug(fmt.Sprintf(format, args...))
-}
-
-func (a SlogLogger) Infof(format string, args ...any) {
-	a.l.Info(fmt.Sprintf(format, args...))
-}
-
-func (a SlogLogger) Warnf(format string, args ...any) {
-	a.l.Warn(fmt.Sprintf(format, args...))
-}
-
-func (a SlogLogger) Errorf(format string, args ...any) {
-	a.l.Error(fmt.Sprintf(format, args...))
-}
+func (a LogLogger) Debugf(format string, args ...any) { a.l.Printf("[DEBUG] "+format, args...) }
+func (a LogLogger) Infof(format string, args ...any)  { a.l.Printf("[INFO] "+format, args...) }
+func (a LogLogger) Warnf(format string, args ...any)  { a.l.Printf("[WARN] "+format, args...) }
+func (a LogLogger) Errorf(format string, args ...any) { a.l.Printf("[ERROR] "+format, args...) }

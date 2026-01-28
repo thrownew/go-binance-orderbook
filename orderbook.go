@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/shopspring/decimal"
+	"github.com/jokruger/dec128"
 )
 
 const (
@@ -79,8 +79,8 @@ type (
 		depth  int
 
 		mu           sync.RWMutex
-		bids         map[string]decimal.Decimal
-		asks         map[string]decimal.Decimal
+		bids         map[string]dec128.Dec128
+		asks         map[string]dec128.Dec128
 		lastUpdateID int64
 		updatedAtMs  int64
 		synced       bool
@@ -91,11 +91,11 @@ type (
 		Updated   time.Time
 		Asks      []Order
 		Bids      []Order
-		BidAmount decimal.Decimal
-		AskAmount decimal.Decimal
+		BidAmount dec128.Dec128
+		AskAmount dec128.Dec128
 	}
 
-	Order [2]decimal.Decimal
+	Order [2]dec128.Dec128
 
 	StreamDepthEvent struct {
 		Stream string     `json:"stream"`
@@ -235,8 +235,8 @@ func NewBuilder(opts ...Option) *Builder {
 		b.books[symbol] = &book{
 			symbol: symbol,
 			depth:  o.storeDepth,
-			bids:   make(map[string]decimal.Decimal),
-			asks:   make(map[string]decimal.Decimal),
+			bids:   make(map[string]dec128.Dec128),
+			asks:   make(map[string]dec128.Dec128),
 		}
 		b.stream[symbol] = make(chan DepthEvent, b.opts.eventChanSize)
 	}
@@ -397,8 +397,8 @@ func (b *Builder) fetchSnapshot(ctx context.Context, limiter chan struct{}, symb
 func (b *book) applySnapshot(snap DepthSnapshot) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.bids = make(map[string]decimal.Decimal)
-	b.asks = make(map[string]decimal.Decimal)
+	b.bids = make(map[string]dec128.Dec128)
+	b.asks = make(map[string]dec128.Dec128)
 	applyLevels(b.bids, snap.Bids, true, b.depth)
 	applyLevels(b.asks, snap.Asks, false, b.depth)
 	b.lastUpdateID = snap.LastUpdateID
@@ -428,14 +428,14 @@ func (b *book) applyEvent(ev DepthEvent, logger Logger) error {
 	return nil
 }
 
-func applyLevels(side map[string]decimal.Decimal, levels [][2]string, desc bool, storeDepth int) {
+func applyLevels(side map[string]dec128.Dec128, levels [][2]string, desc bool, storeDepth int) {
 	for _, lv := range levels {
-		price, err := decimal.NewFromString(lv[0])
-		if err != nil {
+		price := dec128.FromString(lv[0])
+		if price.IsNaN() {
 			continue // skip invalid price
 		}
-		amount, err := decimal.NewFromString(lv[1])
-		if err != nil {
+		amount := dec128.FromString(lv[1])
+		if amount.IsNaN() {
 			continue // skip invalid amount
 		}
 		// normalize price as string
@@ -449,17 +449,17 @@ func applyLevels(side map[string]decimal.Decimal, levels [][2]string, desc bool,
 
 	// Binance have thousands of levels so we need to trim it to avoid memory issues
 
-	sorted := make([]decimal.Decimal, 0, len(side))
+	sorted := make([]dec128.Dec128, 0, len(side))
 	for strPrice := range side {
-		price, err := decimal.NewFromString(strPrice)
-		if err != nil {
+		price := dec128.FromString(strPrice)
+		if price.IsNaN() {
 			continue // skip invalid price
 		}
 		sorted = append(sorted, price)
 	}
 
-	slices.SortFunc(sorted, func(a, b decimal.Decimal) int {
-		cmp := a.Cmp(b)
+	slices.SortFunc(sorted, func(a, b dec128.Dec128) int {
+		cmp := a.Compare(b)
 		if desc {
 			cmp = -cmp
 		}
@@ -475,8 +475,8 @@ func applyLevels(side map[string]decimal.Decimal, levels [][2]string, desc bool,
 }
 
 func (b *book) scrap(depth int) OrderBook {
-	bidAmount := decimal.Zero
-	askAmount := decimal.Zero
+	bidAmount := dec128.Zero
+	askAmount := dec128.Zero
 	b.mu.RLock()
 	for _, amount := range b.bids {
 		bidAmount = bidAmount.Add(amount)
@@ -503,20 +503,20 @@ func (b *book) scrap(depth int) OrderBook {
 	}
 }
 
-func levelsToOrders(levels map[string]decimal.Decimal, limit int, desc bool) []Order {
+func levelsToOrders(levels map[string]dec128.Dec128, limit int, desc bool) []Order {
 	if len(levels) == 0 {
 		return nil
 	}
 	list := make([]Order, 0, len(levels))
 	for strPrice, amount := range levels {
-		price, err := decimal.NewFromString(strPrice)
-		if err != nil {
+		price := dec128.FromString(strPrice)
+		if price.IsNaN() {
 			continue
 		}
 		list = append(list, Order{OrderPriceIndex: price, OrderAmountIndex: amount.Copy()})
 	}
 	slices.SortFunc(list, func(a, b Order) int {
-		cmp := a.Price().Cmp(b.Price())
+		cmp := a.Price().Compare(b.Price())
 		if desc {
 			cmp = -cmp
 		}
@@ -528,10 +528,10 @@ func levelsToOrders(levels map[string]decimal.Decimal, limit int, desc bool) []O
 	return list
 }
 
-func (o Order) Price() decimal.Decimal {
+func (o Order) Price() dec128.Dec128 {
 	return o[OrderPriceIndex]
 }
 
-func (o Order) Amount() decimal.Decimal {
+func (o Order) Amount() dec128.Dec128 {
 	return o[OrderAmountIndex]
 }
